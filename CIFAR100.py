@@ -44,7 +44,7 @@ class CIFAR100:
         size_y = size[1]
         f, axarr = plt.subplots(size_x, size_y)
         plt.subplots_adjust(hspace=0.5)
-        indices = np.random.randint(0, 50000, size=size_x*size_y)
+        indices = np.random.choice(range(data.shape[0]), size=size_x*size_y, replace=False)
 
         for i, index in enumerate(indices):
             print(i, index)
