@@ -6,8 +6,9 @@ from tensorflow import keras
 
 class VGG16:
     NUM_CLASSES = 100
-    BATCH_SIZE = 50
+    BATCH_SIZE = 100
     LEARNING_RATE = 0.001
+    MOMENTUM = 0.9
     MAX_STEPS = 100000
     CONV_FILTER_NUMS = [[64, 64],
                         [128, 128],
@@ -18,10 +19,6 @@ class VGG16:
     FC_LAYER_SIZE = [4096,
                      4096,
                      1000]
-
-    def __init__(self, images, labels):
-        self.images = images
-        self.labels = labels
 
     @staticmethod
     def conv_layer(input, ksize, scope):
@@ -40,16 +37,16 @@ class VGG16:
     @staticmethod
     def fc_layer(input, input_size, layer_size, scope):
         weights = tf.Variable(initial_value=tf.truncated_normal([input_size, layer_size], dtype=tf.float32, stddev=0.1),
-                             name='weights')
+                              name='weights')
         bias = tf.Variable(initial_value=tf.truncated_normal([layer_size], dtype=tf.float32, stddev=0.1),
                            name='biases')
         out = tf.nn.bias_add(tf.matmul(input, weights), bias)
         return tf.nn.relu(out, name=scope)
 
-    def create_architecture(self, input_placeholder):
+    def create_architecture(self, input):
 
         with tf.name_scope('conv1_1') as scope:
-            conv1_1 = self.conv_layer(input=input_placeholder,
+            conv1_1 = self.conv_layer(input=input,
                                       ksize=[3, 3, 3, 64],
                                       scope=scope)
 
@@ -148,29 +145,54 @@ class VGG16:
                                       name=scope)
 
         with tf.name_scope('fc1') as scope:
-            input_size = np.prod(maxpool5.shape[1:])
+            input_size = int(np.prod(maxpool5.shape[1:]))
             flattened_input = tf.reshape(maxpool5, [-1, input_size])
-            tf1 = self.fc_layer(flattened_input,
+            fc1 = self.fc_layer(flattened_input,
                                 input_size=input_size,
                                 layer_size=4096,
                                 scope=scope)
 
+        with tf.name_scope('dropout1') as scope:
+            do1 = tf.nn.dropout(fc1,
+                                keep_prob=0.6,
+                                name=scope)
+
         with tf.name_scope('fc2') as scope:
-            tf2 = self.fc_layer(tf1,
+            fc2 = self.fc_layer(do1,
                                 input_size=4096,
                                 layer_size=4096,
                                 scope=scope)
 
-        with tf.name_scope('fc3') as scope:
-            tf3 = self.fc_layer(tf1,
-                                input_size=4096,
-                                layer_size=100,
-                                scope=scope)
+        with tf.name_scope('dropout2') as scope:
+            do2 = tf.nn.dropout(fc2,
+                                keep_prob=0.6,
+                                name=scope)
 
-        with tf.name_scope('softmax-100') as scope:
-            tf.nn.sparse_softmax_cross_entropy_with_logits(labels=self.labels,
-                                                           logits=tf3,
-                                                           name='softmax')
+        with tf.name_scope('fc3') as scope:
+            weights = tf.Variable(initial_value=tf.truncated_normal([4096, 100], dtype=tf.float32, stddev=0.1),
+                                  name='weights')
+            bias = tf.Variable(initial_value=tf.truncated_normal([100], dtype=tf.float32, stddev=0.1),
+                               name='biases')
+            y = tf.nn.bias_add(tf.matmul(do2, weights),
+                               bias,
+                               name=scope)
+
+        return y
+
+    def classification_loss(self, logits, labels):
+
+        return tf.losses.sparse_softmax_cross_entropy(labels=labels,
+                                                      logits=logits)
+
+
+    def train_step(self, loss, global_step):
+        with tf.name_scope('optimizer') as scope:
+            train_step = tf.train.MomentumOptimizer(self.LEARNING_RATE, momentum=self.MOMENTUM).minimize(loss, global_step=global_step, name=scope)
+
+        return train_step
+
+    def run_tf_session(self, image_placeholder, label_placeholder):
+        pass
 
 
 cifar100 = CIFAR100()
@@ -178,11 +200,33 @@ cifar100 = CIFAR100()
 train_data, train_fine_labels, train_coarse_labels = cifar100.get_train_data()
 test_data, test_fine_labels, test_coarse_labels = cifar100.get_test_data()
 
-cifar100.show_random_images(train_data.astype(int), train_fine_labels, size=(5, 5))
+#cifar100.show_random_images(train_data.astype(int), train_fine_labels, size=(5, 5))
 
-img_placeholder = tf.placeholder(tf.float32, shape=[None, 32, 32, 3], name='images')
+images = tf.placeholder(tf.float32, shape=[None, 32, 32, 3], name='images')
+labels = tf.placeholder(tf.int32, name='labels')
+global_step = tf.Variable(initial_value=0, trainable=False)
 
-vgg16 = VGG16(train_data, train_fine_labels)
-vgg16.create_architecture(img_placeholder)
+vgg16 = VGG16()
+
+y_predicted = vgg16.create_architecture(images)
+
+predicted_labels = tf.argmax(y_predicted, axis=1, output_type=tf.int32)
+accuracy = tf.reduce_mean(tf.cast(tf.equal(predicted_labels, labels), tf.float32))
+
+loss = vgg16.classification_loss(y_predicted, labels)
+
+train_op = vgg16.train_step(loss, global_step)
+n_batches = int(train_data.shape[0]/vgg16.BATCH_SIZE)
+with tf.Session() as sess:
+    sess.run(tf.global_variables_initializer())
+    for i in range(vgg16.MAX_STEPS):
+        for j in range(n_batches):
+            print(i, j)
+            _, accuracy_val, loss_val = sess.run([train_op, accuracy, loss],
+                                         feed_dict={images: train_data[(j*100):(j*100+100)],
+                                                    labels: train_fine_labels[(j*100):(j*100+100)]})
+            print("Iter: {}, Loss: {:.4f}, Accuracy: {:.4f}".format(j, loss_val, accuracy_val))
+
+        print("Iter: {}, Loss: {:.4f}, Accuracy: {:.4f}".format(i, loss_val, accuracy_val))
 
 
